@@ -71,6 +71,16 @@ var inventory_icon_textures: Array[TextureRect] = []
 var inventory_icon_labels: Array[Label] = []
 var inventory_name_labels: Array[Label] = []
 var two_hand_label: Label
+var carry_title: Label
+var carry_hint: Label
+var exploration_shortcuts: Label
+var exploration_shade: TextureRect
+var _carry_styles: Array[StyleBoxFlat] = []
+var _carry_selected: Array[bool] = [false, false, false, false]
+var _carry_selection := -1
+var _carry_title_text := ""
+var _carry_activity := 0.0
+var _prompt_tween: Tween
 
 var notebook_overlay: Control
 var notebook_rows: Array[Panel] = []
@@ -166,6 +176,13 @@ func _process(delta: float) -> void:
 		var fill := PAPER if ratio > 0.25 else DANGER
 		stamina_fill_style.bg_color = fill
 		stamina_fill_style.border_color = fill
+	if inventory_panel != null:
+		_carry_activity = maxf(_carry_activity - delta, 0.0)
+		var carry_alpha := 1.0 if _carry_activity > 0.0 else 0.84
+		inventory_panel.modulate.a = move_toward(inventory_panel.modulate.a, carry_alpha, delta * 2.5)
+		for i in range(inventory_icon_textures.size()):
+			var target_y := 0.0 if _carry_selected[i] else 5.0
+			inventory_icon_textures[i].position.y = move_toward(inventory_icon_textures[i].position.y, target_y, delta * 45.0)
 	if strike_vignette != null:
 		var strike_alpha: float = float([0.0, 0.34, 0.62, 0.86][_run_strikes])
 		strike_vignette.modulate.a = move_toward(strike_vignette.modulate.a, strike_alpha, delta * 2.2)
@@ -179,6 +196,7 @@ func _build_hud() -> void:
 	hud_root.z_index = 10
 	add_child(hud_root)
 
+	_build_exploration_shade()
 	_build_strike_vignette()
 	_build_reticle()
 	_build_prompt()
@@ -356,13 +374,29 @@ func _build_status() -> void:
 	status_panel.add_child(strike_label)
 
 
+## Exploration-only presentation. All controls ignore pointer input; player.gd
+## remains the sole owner of gameplay actions and keyboard handling.
+func _build_exploration_shade() -> void:
+	var gradient := Gradient.new()
+	gradient.colors = PackedColorArray([Color(0.015, 0.018, 0.02, 0.0), Color(0.015, 0.018, 0.02, 0.72)])
+	var texture := GradientTexture2D.new()
+	texture.width = 2
+	texture.height = 256
+	texture.fill_from = Vector2(0.0, 0.0)
+	texture.fill_to = Vector2(0.0, 1.0)
+	texture.gradient = gradient
+	exploration_shade = TextureRect.new()
+	exploration_shade.name = "ExplorationEdgeShade"
+	exploration_shade.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	exploration_shade.offset_top = -280
+	exploration_shade.texture = texture
+	exploration_shade.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	exploration_shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(exploration_shade)
+
+
 func _build_reticle() -> void:
-	var specs := [
-		Rect2(-16, -2, 10, 3),
-		Rect2(6, -2, 10, 3),
-		Rect2(-2, -16, 3, 10),
-		Rect2(-2, 6, 3, 10),
-	]
+	var specs := [Rect2(-6, -1, 3, 2), Rect2(3, -1, 3, 2), Rect2(-1, -6, 2, 3), Rect2(-1, 3, 2, 3)]
 	for spec: Rect2 in specs:
 		var part := ColorRect.new()
 		part.color = Color(PAPER.r, PAPER.g, PAPER.b, 0.62)
@@ -382,26 +416,33 @@ func _build_reticle() -> void:
 func _build_prompt() -> void:
 	prompt_panel = Panel.new()
 	prompt_panel.name = "InteractionPrompt"
-	prompt_panel.add_theme_stylebox_override("panel", _style(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
+	prompt_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	prompt_panel.anchor_left = 0.5
-	prompt_panel.anchor_top = 1.0
+	prompt_panel.anchor_top = 0.5
 	prompt_panel.anchor_right = 0.5
-	prompt_panel.anchor_bottom = 1.0
-	prompt_panel.offset_left = -420
-	prompt_panel.offset_top = -180
-	prompt_panel.offset_right = 420
-	prompt_panel.offset_bottom = -132
+	prompt_panel.anchor_bottom = 0.5
+	prompt_panel.offset_left = -550
+	prompt_panel.offset_top = 42
+	prompt_panel.offset_right = 550
+	prompt_panel.offset_bottom = 98
 	prompt_panel.visible = false
 	prompt_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(prompt_panel)
 
-	prompt_label = _make_label("", 23, PAPER)
+	prompt_label = _make_label("", 24, Color(0.94, 0.92, 0.85))
 	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	prompt_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	prompt_label.offset_left = 20
 	prompt_label.offset_right = -20
 	prompt_panel.add_child(prompt_label)
+
+	var accent := ColorRect.new()
+	accent.color = BRASS_BRIGHT
+	accent.position = Vector2(538, 54)
+	accent.size = Vector2(24, 2)
+	accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prompt_panel.add_child(accent)
 
 
 func _build_lead_timer() -> void:
@@ -431,10 +472,10 @@ func _build_stamina() -> void:
 	stamina_panel.add_theme_stylebox_override("panel", _style(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
 	stamina_panel.anchor_top = 1.0
 	stamina_panel.anchor_bottom = 1.0
-	stamina_panel.offset_left = 28
-	stamina_panel.offset_top = -42
-	stamina_panel.offset_right = 288
-	stamina_panel.offset_bottom = -28
+	stamina_panel.offset_left = 54
+	stamina_panel.offset_top = -82
+	stamina_panel.offset_right = 264
+	stamina_panel.offset_bottom = -78
 	stamina_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(stamina_panel)
 
@@ -454,31 +495,46 @@ func _build_stamina() -> void:
 func _build_inventory() -> void:
 	inventory_panel = Panel.new()
 	inventory_panel.name = "CarryInventory"
-	inventory_panel.anchor_left = 0.5
+	inventory_panel.anchor_left = 1.0
 	inventory_panel.anchor_top = 1.0
-	inventory_panel.anchor_right = 0.5
+	inventory_panel.anchor_right = 1.0
 	inventory_panel.anchor_bottom = 1.0
-	inventory_panel.offset_left = -182
-	inventory_panel.offset_top = -108
-	inventory_panel.offset_right = 182
-	inventory_panel.offset_bottom = -26
-	inventory_panel.add_theme_stylebox_override("panel", _style(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
+	inventory_panel.offset_left = -478
+	inventory_panel.offset_top = -216
+	inventory_panel.offset_right = -54
+	inventory_panel.offset_bottom = -44
+	inventory_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	inventory_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(inventory_panel)
+
+	carry_title = _make_label("空手", 24, Color(0.94, 0.92, 0.85))
+	carry_title.position = Vector2(-140, 0)
+	carry_title.size = Vector2(564, 36)
+	carry_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	carry_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	inventory_panel.add_child(carry_title)
+	carry_hint = _make_label("1–4  选择", 17, Color(0.76, 0.74, 0.68))
+	carry_hint.position = Vector2(-140, 38)
+	carry_hint.size = Vector2(564, 28)
+	carry_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	inventory_panel.add_child(carry_hint)
 
 	for i in range(4):
 		var slot := Panel.new()
 		slot.name = "CarrySlot%d" % (i + 1)
-		slot.position = Vector2(i * 94, 0)
-		slot.size = Vector2(82, 82)
-		slot.add_theme_stylebox_override("panel", _style(Color(0.035, 0.028, 0.022, 0.58), Color(0.68, 0.62, 0.49, 0.72), 2, 5))
+		slot.position = Vector2(i * 110, 76)
+		slot.size = Vector2(94, 96)
+		var line := _style(Color.TRANSPARENT, Color(0.65, 0.61, 0.50, 0.26), 0, 0)
+		line.border_width_bottom = 1
+		slot.add_theme_stylebox_override("panel", line)
+		_carry_styles.append(line)
 		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		inventory_panel.add_child(slot)
 		inventory_slots.append(slot)
 
 		var icon_texture := TextureRect.new()
 		icon_texture.name = "ItemIcon"
-		icon_texture.position = Vector2(9, 9)
+		icon_texture.position = Vector2(15, 5)
 		icon_texture.size = Vector2(64, 64)
 		icon_texture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon_texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -488,26 +544,48 @@ func _build_inventory() -> void:
 		slot.add_child(icon_texture)
 		inventory_icon_textures.append(icon_texture)
 
+		var fallback := _make_label("·", 22, PAPER_DIM)
+		fallback.position = Vector2(0, 8)
+		fallback.size = Vector2(94, 48)
+		fallback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		fallback.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		slot.add_child(fallback)
+		inventory_icon_labels.append(fallback)
+		var number := _make_label(str(i + 1), 15, PAPER_DIM)
+		number.position = Vector2(0, 67)
+		number.size = Vector2(94, 25)
+		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		slot.add_child(number)
+		inventory_number_labels.append(number)
+
+	exploration_shortcuts = _make_label("T  手表     N  手记", 17, Color(0.76, 0.74, 0.68))
+	exploration_shortcuts.anchor_top = 1.0
+	exploration_shortcuts.anchor_bottom = 1.0
+	exploration_shortcuts.offset_left = 54
+	exploration_shortcuts.offset_top = -62
+	exploration_shortcuts.offset_right = 354
+	exploration_shortcuts.offset_bottom = -32
+	hud_root.add_child(exploration_shortcuts)
+
 
 func _build_help() -> void:
 	help_panel = Panel.new()
 	help_panel.name = "HelpToast"
-	help_panel.add_theme_stylebox_override("panel", _style(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
-	help_panel.anchor_left = 0.5
-	help_panel.anchor_top = 1.0
-	help_panel.anchor_right = 0.5
-	help_panel.anchor_bottom = 1.0
-	help_panel.offset_left = -500
-	help_panel.offset_top = -232
-	help_panel.offset_right = 500
-	help_panel.offset_bottom = -190
+	var rule := _style(Color.TRANSPARENT, BRASS, 0, 0)
+	rule.border_width_left = 2
+	help_panel.add_theme_stylebox_override("panel", rule)
+	help_panel.offset_left = 54
+	help_panel.offset_top = 64
+	help_panel.offset_right = 734
+	help_panel.offset_bottom = 154
 	help_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(help_panel)
 
-	help_label = _make_label("", 21, PAPER_DIM)
-	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	help_label = _make_label("", 23, PAPER)
 	help_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	help_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	help_label.offset_left = 22
 	help_panel.add_child(help_label)
 	help_panel.visible = false
 
@@ -837,7 +915,19 @@ func set_stamina(value: float, maximum := 100.0, sprinting := false) -> void:
 
 
 func set_prompt(text: String) -> void:
+	var changed := _prompt_text != text
 	_prompt_text = text
+	if changed and prompt_panel != null:
+		if _prompt_tween != null and _prompt_tween.is_valid():
+			_prompt_tween.kill()
+		# Callers refresh this string every frame. Animate only on a new target,
+		# never on a timed action's continuously changing countdown.
+		if text.begins_with("E  "):
+			prompt_panel.modulate.a = 0.35
+			_prompt_tween = create_tween()
+			_prompt_tween.tween_property(prompt_panel, "modulate:a", 1.0, 0.16)
+		else:
+			prompt_panel.modulate.a = 1.0
 	if prompt_label != null:
 		prompt_label.text = text
 	_refresh_prompt_visibility()
@@ -857,9 +947,26 @@ func set_inventory(items: Array, selected: int, _two_handed: bool) -> void:
 		_set_small_item_slot(i, item, occupied_by_hands)
 		var same_selected_item := selected_uid != 0 and item is Dictionary and int(item.get("uid", 0)) == selected_uid
 		var is_selected := i == selected_index or same_selected_item
-		var border := PAPER if is_selected else Color(0.68, 0.62, 0.49, 0.72)
-		var background := Color(0.08, 0.06, 0.045, 0.72) if is_selected else Color(0.035, 0.028, 0.022, 0.58)
-		inventory_slots[i].add_theme_stylebox_override("panel", _style(background, border, 2, 5))
+		_carry_selected[i] = is_selected
+		_carry_styles[i].border_color = BRASS_BRIGHT if is_selected else Color(0.65, 0.61, 0.50, 0.26)
+		_carry_styles[i].border_width_bottom = 2 if is_selected else 1
+		inventory_number_labels[i].add_theme_color_override("font_color", PAPER if is_selected else PAPER_DIM)
+	var active: Variant = items[selected_index] if selected_index < items.size() else null
+	var title := _item_title(active)
+	if title.is_empty():
+		title = "空手"
+	if selected_index != _carry_selection or title != _carry_title_text:
+		_carry_activity = 3.0
+		_carry_selection = selected_index
+		_carry_title_text = title
+	carry_title.text = title
+	var reserved := active is Dictionary and bool(active.get("reserved", false))
+	var hint := "1–4  选择"
+	if not _is_empty_item(active):
+		hint += "     G  放下" if reserved else "     F  使用     G  放下"
+	if _two_handed:
+		hint = "双手占用  ·  " + hint
+	carry_hint.text = hint
 
 
 func set_notebook(entries: Variant, open: bool) -> void:
@@ -1066,6 +1173,10 @@ func _refresh_prompt_visibility() -> void:
 		inventory_panel.visible = not full_screen_overlay
 	if stamina_panel != null:
 		stamina_panel.visible = not full_screen_overlay
+	if exploration_shortcuts != null:
+		exploration_shortcuts.visible = not full_screen_overlay
+	if exploration_shade != null:
+		exploration_shade.visible = not full_screen_overlay
 	if status_panel != null:
 		status_panel.visible = not _end_open
 	_refresh_watch_visibility()
@@ -1103,6 +1214,8 @@ func _set_small_item_slot(index: int, item: Variant, occupied_by_hands: bool) ->
 	inventory_icon_textures[index].texture = texture
 	inventory_icon_textures[index].visible = texture != null
 	inventory_icon_textures[index].modulate = Color(1.0, 1.0, 1.0, 0.42 if occupied_by_hands else 1.0)
+	inventory_icon_labels[index].visible = texture == null
+	inventory_icon_labels[index].text = "双手" if item is Dictionary and str(item.get("item_id", "")) == "body" else "·"
 
 
 func _set_suitcase_slot(index: int, item: Variant) -> void:
